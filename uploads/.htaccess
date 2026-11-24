@@ -1,0 +1,5 @@
+# Block direct web access to the private uploads folder.
+# Logos are served from public/uploads only.
+<IfModule mod_authz_core.c>
+    Require all denied
+</IfModule>

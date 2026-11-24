@@ -6,15 +6,21 @@ class DashboardController
     {
         AuthMiddleware::requireSuperAdmin();
 
-        $totalUsers = (new User())->countAll();
+        $tenantModel = new Tenant();
+        $userModel = new User();
 
         Response::json([
             "success" => true,
             "stats" => [
-                "total_businesses" => 0,
-                "active_businesses" => 0,
-                "suspended_businesses" => 0,
-                "total_users" => $totalUsers,
+                "total_clients" => $tenantModel->countAll(),
+                "active_clients" => $tenantModel->countByStatus("active"),
+                "suspended_clients" => $tenantModel->countByStatus("suspended"),
+                "total_tenant_users" => $userModel->countTenantUsers(),
+                // Legacy keys kept for older frontend builds during transition.
+                "total_businesses" => $tenantModel->countAll(),
+                "active_businesses" => $tenantModel->countByStatus("active"),
+                "suspended_businesses" => $tenantModel->countByStatus("suspended"),
+                "total_users" => $userModel->countTenantUsers(),
             ],
         ]);
     }

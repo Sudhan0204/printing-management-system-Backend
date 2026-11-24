@@ -15,6 +15,9 @@ if (PHP_SAPI !== "cli") {
     exit;
 }
 
+require_once __DIR__ . "/../app/core/Env.php";
+Env::load(__DIR__ . "/../.env");
+
 require_once __DIR__ . "/../app/core/Config.php";
 require_once __DIR__ . "/../app/Helpers/Response.php";
 require_once __DIR__ . "/../app/core/Database.php";

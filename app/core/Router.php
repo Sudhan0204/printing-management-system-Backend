@@ -14,6 +14,16 @@ class Router
         $this->add("POST", $path, $handler);
     }
 
+    public function put($path, $handler)
+    {
+        $this->add("PUT", $path, $handler);
+    }
+
+    public function patch($path, $handler)
+    {
+        $this->add("PATCH", $path, $handler);
+    }
+
     public function add($method, $path, $handler)
     {
         $this->routes[] = [
@@ -29,8 +39,10 @@ class Router
         $method = strtoupper($method);
 
         foreach ($this->routes as $route) {
-            if ($route["method"] === $method && $route["path"] === $path) {
-                call_user_func($route["handler"]);
+            $params = [];
+
+            if ($route["method"] === $method && $this->match($route["path"], $path, $params)) {
+                call_user_func($route["handler"], $params);
                 return;
             }
         }
@@ -39,6 +51,37 @@ class Router
             "success" => false,
             "message" => "API route not found",
         ], 404);
+    }
+
+    /**
+     * Match /api/admin/clients/{id} style paths and capture params.
+     */
+    private function match($pattern, $path, &$params)
+    {
+        $paramNames = [];
+
+        $regex = preg_replace_callback(
+            "#\{([a-zA-Z_][a-zA-Z0-9_]*)\}#",
+            function ($matches) use (&$paramNames) {
+                $paramNames[] = $matches[1];
+                return "([^/]+)";
+            },
+            $pattern
+        );
+
+        $regex = "#^" . $regex . "$#";
+
+        if (!preg_match($regex, $path, $matches)) {
+            return false;
+        }
+
+        array_shift($matches);
+
+        foreach ($paramNames as $index => $name) {
+            $params[$name] = $matches[$index] ?? null;
+        }
+
+        return true;
     }
 
     /**
