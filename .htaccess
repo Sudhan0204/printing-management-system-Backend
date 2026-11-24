@@ -1,0 +1,5 @@
+# Deny direct HTTP access to the backend root (including .env).
+# The public API entrypoint is backend/public/.
+<IfModule mod_authz_core.c>
+    Require all denied
+</IfModule>

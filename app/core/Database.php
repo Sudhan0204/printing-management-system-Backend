@@ -2,10 +2,16 @@
 
 class Database
 {
+    private static $shared = null;
     private $connection = null;
 
     public function connect()
     {
+        if (self::$shared instanceof PDO) {
+            $this->connection = self::$shared;
+            return $this->connection;
+        }
+
         if ($this->connection instanceof PDO) {
             return $this->connection;
         }
@@ -30,6 +36,7 @@ class Database
                     PDO::ATTR_EMULATE_PREPARES => false,
                 ]
             );
+            self::$shared = $this->connection;
         } catch (PDOException $exception) {
             if (PHP_SAPI === "cli") {
                 throw $exception;

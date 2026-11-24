@@ -17,6 +17,9 @@ class AuthController
         ]);
     }
 
+    /**
+     * Super Admin login. Kept under /api/auth/login and /api/admin/login.
+     */
     public function login()
     {
         Csrf::validateRequest();
@@ -70,7 +73,7 @@ class AuthController
             ], 403);
         }
 
-        if ($user["role"] !== "super_admin") {
+        if ($user["role"] !== "super_admin" || $user["tenant_id"] !== null) {
             Response::json([
                 "success" => false,
                 "message" => "Super Admin access only",
@@ -84,6 +87,7 @@ class AuthController
             "name" => $user["name"],
             "email" => $user["email"],
             "role" => $user["role"],
+            "tenant_id" => null,
         ];
         $_SESSION["last_activity"] = time();
 
@@ -95,9 +99,12 @@ class AuthController
         ]);
     }
 
+    /**
+     * Returns the current session user (admin or tenant) when authenticated.
+     */
     public function me()
     {
-        $user = AuthMiddleware::requireSuperAdmin();
+        $user = AuthMiddleware::requireAuth();
 
         Response::json([
             "success" => true,
