@@ -6,6 +6,7 @@ Env::load(__DIR__ . "/../.env");
 require_once __DIR__ . "/../app/core/Config.php";
 require_once __DIR__ . "/../app/Helpers/Response.php";
 require_once __DIR__ . "/../app/Helpers/Upload.php";
+require_once __DIR__ . "/../app/Helpers/BillingCalc.php";
 require_once __DIR__ . "/../app/core/Database.php";
 require_once __DIR__ . "/../app/core/Router.php";
 require_once __DIR__ . "/../app/core/Session.php";
@@ -17,6 +18,9 @@ require_once __DIR__ . "/../app/Controllers/AuthController.php";
 require_once __DIR__ . "/../app/Controllers/DashboardController.php";
 require_once __DIR__ . "/../app/Controllers/ClientController.php";
 require_once __DIR__ . "/../app/Controllers/TenantAuthController.php";
+require_once __DIR__ . "/../app/Controllers/CustomerController.php";
+require_once __DIR__ . "/../app/Controllers/ProductController.php";
+require_once __DIR__ . "/../app/Controllers/BillController.php";
 
 $appConfig = Config::get("app");
 $origin = $_SERVER["HTTP_ORIGIN"] ?? "";
