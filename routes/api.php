@@ -10,6 +10,7 @@ $customerController = new CustomerController();
 $productController = new ProductController();
 $billController = new BillController();
 $paymentController = new PaymentController();
+$reportController = new ReportController();
 
 $router->get("/api/health", function () {
     $database = new Database();
@@ -85,5 +86,11 @@ $router->get("/api/tenant/payments/outstanding-bills", [$paymentController, "out
 $router->get("/api/tenant/payments", [$paymentController, "index"]);
 $router->post("/api/tenant/payments", [$paymentController, "store"]);
 $router->get("/api/tenant/payments/{id}", [$paymentController, "show"]);
+
+// Tenant reports
+$router->get("/api/tenant/reports", [$reportController, "hub"]);
+$router->get("/api/tenant/reports/customers", [$reportController, "customers"]);
+$router->get("/api/tenant/reports/customers/{id}", [$reportController, "customerShow"]);
+$router->post("/api/tenant/reports/customers/export", [$reportController, "exportCustomers"]);
 
 return $router;

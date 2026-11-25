@@ -1,0 +1,21 @@
+{
+  "name": "printdesk/backend",
+  "description": "Printing Business Management SaaS API",
+  "type": "project",
+  "require": {
+    "php": ">=8.0",
+    "ext-gd": "*",
+    "ext-mbstring": "*",
+    "ext-zip": "*",
+    "phpoffice/phpspreadsheet": "^1.29"
+  },
+  "config": {
+    "optimize-autoloader": true,
+    "sort-packages": true
+  },
+  "scripts": {
+    "post-install-cmd": [
+      "@php -r \"echo 'If vendor/autoload.php from Composer is missing, the local packages/ autoload is used instead.' . PHP_EOL;\""
+    ]
+  }
+}
