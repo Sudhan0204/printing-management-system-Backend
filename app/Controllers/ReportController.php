@@ -23,44 +23,9 @@ class ReportController
                 [
                     "key" => "customers",
                     "title" => "Customer Reports",
-                    "description" => "Filter customers and export billing/payment workbooks.",
-                    "path" => "/reports/customers",
+                    "description" => "Generate, filter and export detailed customer billing and payment records.",
+                    "path" => "/reports",
                     "available" => true,
-                ],
-                [
-                    "key" => "sales",
-                    "title" => "Sales Reports",
-                    "description" => "Coming soon",
-                    "path" => null,
-                    "available" => false,
-                ],
-                [
-                    "key" => "payments",
-                    "title" => "Payment Reports",
-                    "description" => "Coming soon",
-                    "path" => null,
-                    "available" => false,
-                ],
-                [
-                    "key" => "outstanding",
-                    "title" => "Outstanding Balance Reports",
-                    "description" => "Coming soon",
-                    "path" => null,
-                    "available" => false,
-                ],
-                [
-                    "key" => "expenses",
-                    "title" => "Expense Reports",
-                    "description" => "Coming soon",
-                    "path" => null,
-                    "available" => false,
-                ],
-                [
-                    "key" => "profit_loss",
-                    "title" => "Profit & Loss Reports",
-                    "description" => "Coming soon",
-                    "path" => null,
-                    "available" => false,
                 ],
             ],
         ]);
@@ -175,6 +140,7 @@ class ReportController
             $allFilters = $filters;
             $allFilters["search_name"] = "";
             $allFilters["search_phone"] = "";
+            $allFilters["search_email"] = "";
             $allFilters["date_from"] = null;
             $allFilters["date_to"] = null;
             $allFilters["date_preset"] = "";
@@ -250,6 +216,7 @@ class ReportController
     {
         $searchName = trim((string) ($input["search_name"] ?? $input["name"] ?? ""));
         $searchPhone = preg_replace("/\D/", "", (string) ($input["search_phone"] ?? $input["phone"] ?? ""));
+        $searchEmail = strtolower(trim((string) ($input["search_email"] ?? $input["email"] ?? "")));
         $status = strtolower(trim((string) ($input["status"] ?? "")));
         $preset = strtolower(trim((string) ($input["date_preset"] ?? "")));
         $dateFrom = trim((string) ($input["date_from"] ?? ""));
@@ -261,6 +228,10 @@ class ReportController
 
         if (strlen($searchPhone) > 15) {
             $searchPhone = substr($searchPhone, 0, 15);
+        }
+
+        if (strlen($searchEmail) > 254) {
+            $searchEmail = substr($searchEmail, 0, 254);
         }
 
         if ($status !== "" && !in_array($status, ["active", "inactive"], true)) {
@@ -276,6 +247,7 @@ class ReportController
         return [
             "search_name" => $searchName,
             "search_phone" => $searchPhone,
+            "search_email" => $searchEmail,
             "status" => $status,
             "date_preset" => $preset,
             "date_from" => $resolved["from"],
@@ -433,8 +405,23 @@ class ReportController
         $outstandingStmt->execute($outstandingParams);
         $outstanding = (float) $outstandingStmt->fetchColumn();
 
+        $billCountParams = $params;
+        $billCountSql = "SELECT COUNT(*)
+                         FROM bills b
+                         INNER JOIN customers c ON c.id = b.customer_id AND c.tenant_id = b.tenant_id
+                         WHERE {$whereSql} AND b.tenant_id = :tenant_id_bc {$billDateSql}";
+        $billCountParams[":tenant_id_bc"] = $tenantId;
+        if ($billDateSql !== "") {
+            $billCountParams[":bill_from"] = $filters["date_from"];
+            $billCountParams[":bill_to"] = $filters["date_to"];
+        }
+        $billCountStmt = $this->db->prepare($billCountSql);
+        $billCountStmt->execute($billCountParams);
+        $totalBills = (int) $billCountStmt->fetchColumn();
+
         return [
             "total_customers" => $customerCount,
+            "total_bills" => $totalBills,
             "total_billed" => round($totalBilled, 2),
             "total_received" => round($totalPaid, 2),
             "total_outstanding" => round($outstanding, 2),
@@ -454,6 +441,11 @@ class ReportController
         if ($filters["search_phone"] !== "") {
             $where[] = "c.phone LIKE :search_phone";
             $params[":search_phone"] = "%" . $filters["search_phone"] . "%";
+        }
+
+        if (!empty($filters["search_email"])) {
+            $where[] = "LOWER(COALESCE(c.email, '')) LIKE :search_email";
+            $params[":search_email"] = "%" . $filters["search_email"] . "%";
         }
 
         if ($filters["status"] !== "") {
