@@ -26,6 +26,12 @@ class BillController
             $params[":search"] = "%" . substr($search, 0, 100) . "%";
         }
 
+        $paymentStatus = strtolower(trim((string) ($_GET["payment_status"] ?? "")));
+        if (in_array($paymentStatus, ["unpaid", "partially_paid", "paid"], true)) {
+            $where[] = "b.payment_status = :payment_status";
+            $params[":payment_status"] = $paymentStatus;
+        }
+
         $whereSql = implode(" AND ", $where);
         $countStmt = $this->db->prepare(
             "SELECT COUNT(*) FROM bills b
@@ -36,7 +42,9 @@ class BillController
         $total = (int) $countStmt->fetchColumn();
 
         $offset = ($page - 1) * $perPage;
-        $sql = "SELECT b.id, b.bill_number, b.bill_date, b.total_amount, b.status, b.created_at,
+
+        $sql = "SELECT b.id, b.bill_number, b.bill_date, b.total_amount, b.paid_amount,
+                       b.balance_amount, b.payment_status, b.status, b.created_at,
                        c.id AS customer_id, c.customer_name, c.phone
                 FROM bills b
                 INNER JOIN customers c ON c.id = b.customer_id AND c.tenant_id = b.tenant_id
@@ -52,6 +60,9 @@ class BillController
                 "bill_number" => $row["bill_number"],
                 "bill_date" => $row["bill_date"],
                 "total_amount" => (float) $row["total_amount"],
+                "paid_amount" => (float) $row["paid_amount"],
+                "balance_amount" => (float) $row["balance_amount"],
+                "payment_status" => $row["payment_status"],
                 "status" => $row["status"],
                 "created_at" => $row["created_at"],
                 "customer" => [
@@ -163,16 +174,51 @@ class BillController
             // Prefer rate from current active rate history; allow override only if valid number provided.
             $currentRate = $this->currentRate($productId, $tenantId);
             $rateInput = $item["rate"] ?? null;
-            $rate = $rateInput !== null && $rateInput !== ""
-                ? (float) $rateInput
-                : ($currentRate !== null ? (float) $currentRate : null);
+            $rateRaw = $rateInput !== null && $rateInput !== ""
+                ? (string) $rateInput
+                : ($currentRate !== null ? (string) $currentRate : "");
 
-            if ($rate === null) {
+            if ($rateRaw === "") {
                 Response::json([
                     "success" => false,
                     "message" => "No rate set for " . $product["product_name"],
+                    "errors" => ["items." . $index . ".rate" => "No rate set for " . $product["product_name"]],
                 ], 422);
             }
+
+            $rateError = Validation::money($rateRaw, "Rate", true);
+            if ($rateError) {
+                Response::json([
+                    "success" => false,
+                    "message" => $product["product_name"] . ": " . $rateError,
+                    "errors" => ["items." . $index . ".rate" => $rateError],
+                ], 422);
+            }
+
+            $qtyRaw = $item["quantity"] ?? "";
+            $qtyError = Validation::positiveNumber($qtyRaw, "Quantity", false, 4);
+            if ($qtyError) {
+                Response::json([
+                    "success" => false,
+                    "message" => $product["product_name"] . ": " . $qtyError,
+                    "errors" => ["items." . $index . ".quantity" => $qtyError],
+                ], 422);
+            }
+
+            if ($product["pricing_type"] === "dimension_based") {
+                $widthError = Validation::positiveNumber($item["width"] ?? "", "Width", false, 2);
+                $heightError = Validation::positiveNumber($item["height"] ?? "", "Height", false, 2);
+                if ($widthError || $heightError) {
+                    $dimError = $widthError ?: $heightError;
+                    Response::json([
+                        "success" => false,
+                        "message" => $product["product_name"] . ": " . $dimError,
+                        "errors" => ["items." . $index . ".dimensions" => $dimError],
+                    ], 422);
+                }
+            }
+
+            $rate = round((float) $rateRaw, 2);
 
             try {
                 $calc = BillingCalc::calculateLine(
@@ -212,8 +258,12 @@ class BillController
             $billNumber = $this->nextBillNumber($tenantId);
 
             $billStmt = $this->db->prepare(
-                "INSERT INTO bills (tenant_id, customer_id, bill_number, bill_date, total_amount, status)
-                 VALUES (:tenant_id, :customer_id, :bill_number, :bill_date, :total_amount, 'saved')"
+                "INSERT INTO bills
+                    (tenant_id, customer_id, bill_number, bill_date, total_amount,
+                     paid_amount, balance_amount, payment_status, status)
+                 VALUES
+                    (:tenant_id, :customer_id, :bill_number, :bill_date, :total_amount,
+                     0, :balance_amount, 'unpaid', 'saved')"
             );
             $billStmt->execute([
                 ":tenant_id" => $tenantId,
@@ -221,6 +271,7 @@ class BillController
                 ":bill_number" => $billNumber,
                 ":bill_date" => $billDate,
                 ":total_amount" => $totalAmount,
+                ":balance_amount" => $totalAmount,
             ]);
 
             $billId = (int) $this->db->lastInsertId();
@@ -276,7 +327,8 @@ class BillController
     private function findBill($id, $tenantId)
     {
         $statement = $this->db->prepare(
-            "SELECT b.id, b.bill_number, b.bill_date, b.total_amount, b.status, b.created_at, b.updated_at,
+            "SELECT b.id, b.bill_number, b.bill_date, b.total_amount, b.paid_amount, b.balance_amount,
+                    b.payment_status, b.status, b.created_at, b.updated_at,
                     c.id AS customer_id, c.customer_name, c.phone, c.email, c.address, c.city
              FROM bills b
              INNER JOIN customers c ON c.id = b.customer_id AND c.tenant_id = b.tenant_id
@@ -317,6 +369,26 @@ class BillController
             ];
         }, $itemsStmt->fetchAll());
 
+        $paymentsStmt = $this->db->prepare(
+            "SELECT id, payment_date, payment_method, amount, reference_number, notes, created_at
+             FROM payments
+             WHERE bill_id = :bill_id AND tenant_id = :tenant_id
+             ORDER BY payment_date ASC, id ASC"
+        );
+        $paymentsStmt->execute([":bill_id" => $id, ":tenant_id" => $tenantId]);
+        $payments = array_map(function ($payment) {
+            return [
+                "id" => (int) $payment["id"],
+                "payment_date" => $payment["payment_date"],
+                "payment_method" => $payment["payment_method"],
+                "payment_method_label" => PaymentController::methodLabel($payment["payment_method"]),
+                "amount" => (float) $payment["amount"],
+                "reference_number" => $payment["reference_number"],
+                "notes" => $payment["notes"],
+                "created_at" => $payment["created_at"],
+            ];
+        }, $paymentsStmt->fetchAll());
+
         $totalQuantity = 0.0;
         foreach ($items as $item) {
             $totalQuantity += $item["quantity"];
@@ -327,6 +399,9 @@ class BillController
             "bill_number" => $row["bill_number"],
             "bill_date" => $row["bill_date"],
             "total_amount" => (float) $row["total_amount"],
+            "paid_amount" => (float) $row["paid_amount"],
+            "balance_amount" => (float) $row["balance_amount"],
+            "payment_status" => $row["payment_status"],
             "total_quantity" => round($totalQuantity, 4),
             "status" => $row["status"],
             "created_at" => $row["created_at"],
@@ -340,6 +415,7 @@ class BillController
                 "city" => $row["city"],
             ],
             "items" => $items,
+            "payments" => $payments,
         ];
     }
 

@@ -67,7 +67,72 @@ class CustomerController
             Response::json(["success" => false, "message" => "Customer not found"], 404);
         }
 
-        Response::json(["success" => true, "customer" => $this->format($customer)]);
+        $tenantId = (int) $user["tenant_id"];
+        $customerId = (int) $customer["id"];
+
+        $totalsStmt = $this->db->prepare(
+            "SELECT
+                COALESCE(SUM(total_amount), 0) AS total_billed,
+                COALESCE(SUM(paid_amount), 0) AS total_paid,
+                COALESCE(SUM(balance_amount), 0) AS outstanding_balance
+             FROM bills
+             WHERE tenant_id = :tenant_id AND customer_id = :customer_id"
+        );
+        $totalsStmt->execute([":tenant_id" => $tenantId, ":customer_id" => $customerId]);
+        $totals = $totalsStmt->fetch() ?: [];
+
+        $billsStmt = $this->db->prepare(
+            "SELECT id, bill_number, bill_date, total_amount, paid_amount, balance_amount, payment_status
+             FROM bills
+             WHERE tenant_id = :tenant_id AND customer_id = :customer_id
+             ORDER BY bill_date DESC, id DESC
+             LIMIT 50"
+        );
+        $billsStmt->execute([":tenant_id" => $tenantId, ":customer_id" => $customerId]);
+
+        $paymentsStmt = $this->db->prepare(
+            "SELECT p.id, p.payment_date, p.payment_method, p.amount, p.reference_number,
+                    b.bill_number, b.id AS bill_id
+             FROM payments p
+             INNER JOIN bills b ON b.id = p.bill_id AND b.tenant_id = p.tenant_id
+             WHERE p.tenant_id = :tenant_id AND p.customer_id = :customer_id
+             ORDER BY p.payment_date DESC, p.id DESC
+             LIMIT 50"
+        );
+        $paymentsStmt->execute([":tenant_id" => $tenantId, ":customer_id" => $customerId]);
+
+        Response::json([
+            "success" => true,
+            "customer" => $this->format($customer),
+            "payment_summary" => [
+                "total_billed" => (float) ($totals["total_billed"] ?? 0),
+                "total_paid" => (float) ($totals["total_paid"] ?? 0),
+                "outstanding_balance" => (float) ($totals["outstanding_balance"] ?? 0),
+            ],
+            "bills" => array_map(function ($row) {
+                return [
+                    "id" => (int) $row["id"],
+                    "bill_number" => $row["bill_number"],
+                    "bill_date" => $row["bill_date"],
+                    "total_amount" => (float) $row["total_amount"],
+                    "paid_amount" => (float) $row["paid_amount"],
+                    "balance_amount" => (float) $row["balance_amount"],
+                    "payment_status" => $row["payment_status"],
+                ];
+            }, $billsStmt->fetchAll()),
+            "payments" => array_map(function ($row) {
+                return [
+                    "id" => (int) $row["id"],
+                    "payment_date" => $row["payment_date"],
+                    "payment_method" => $row["payment_method"],
+                    "payment_method_label" => PaymentController::methodLabel($row["payment_method"]),
+                    "amount" => (float) $row["amount"],
+                    "reference_number" => $row["reference_number"],
+                    "bill_id" => (int) $row["bill_id"],
+                    "bill_number" => $row["bill_number"],
+                ];
+            }, $paymentsStmt->fetchAll()),
+        ]);
     }
 
     public function store()
@@ -79,7 +144,7 @@ class CustomerController
         $errors = $this->validate($input, true);
 
         if ($errors) {
-            Response::json(["success" => false, "message" => $errors[0], "errors" => $errors], 422);
+            Validation::fail($errors);
         }
 
         $sql = "INSERT INTO customers
@@ -123,7 +188,7 @@ class CustomerController
         $errors = $this->validate($input, false);
 
         if ($errors) {
-            Response::json(["success" => false, "message" => $errors[0], "errors" => $errors], 422);
+            Validation::fail($errors);
         }
 
         $sql = "UPDATE customers SET
@@ -232,7 +297,7 @@ class CustomerController
     {
         return [
             "customer_name" => trim((string) ($input["customer_name"] ?? "")),
-            "phone" => preg_replace("/\s+/", "", trim((string) ($input["phone"] ?? ""))),
+            "phone" => Validation::normalizePhone($input["phone"] ?? ""),
             "email" => strtolower(trim((string) ($input["email"] ?? ""))),
             "address" => trim((string) ($input["address"] ?? "")),
             "city" => trim((string) ($input["city"] ?? "")),
@@ -245,24 +310,61 @@ class CustomerController
     {
         $errors = [];
 
-        if ($input["customer_name"] === "") {
-            $errors[] = "Customer name is required";
-        } elseif (strlen($input["customer_name"]) > 150) {
-            $errors[] = "Customer name is too long";
+        $nameError = Validation::length(
+            $input["customer_name"],
+            Validation::LIMITS["customer_name"]["min"],
+            Validation::LIMITS["customer_name"]["max"],
+            "Customer name"
+        );
+        if ($nameError) {
+            $errors["customer_name"] = $nameError;
         }
 
-        if ($input["phone"] === "") {
-            $errors[] = "Phone is required";
-        } elseif (!preg_match("/^[0-9+\-]{7,20}$/", $input["phone"])) {
-            $errors[] = "Enter a valid phone number";
+        $phoneError = Validation::indianMobile($input["phone"]);
+        if ($phoneError) {
+            $errors["phone"] = $phoneError;
         }
 
-        if ($input["email"] !== "" && !filter_var($input["email"], FILTER_VALIDATE_EMAIL)) {
-            $errors[] = "Enter a valid email";
+        $emailError = Validation::email($input["email"], false);
+        if ($emailError) {
+            $errors["email"] = $emailError;
+        }
+
+        $addressError = Validation::length(
+            $input["address"],
+            Validation::LIMITS["address"]["min"],
+            Validation::LIMITS["address"]["max"],
+            "Address",
+            false
+        );
+        if ($addressError) {
+            $errors["address"] = $addressError;
+        }
+
+        $cityError = Validation::length(
+            $input["city"],
+            Validation::LIMITS["city"]["min"],
+            Validation::LIMITS["city"]["max"],
+            "City",
+            false
+        );
+        if ($cityError) {
+            $errors["city"] = $cityError;
+        }
+
+        $notesError = Validation::length(
+            $input["notes"],
+            Validation::LIMITS["notes"]["min"],
+            Validation::LIMITS["notes"]["max"],
+            "Notes",
+            false
+        );
+        if ($notesError) {
+            $errors["notes"] = $notesError;
         }
 
         if (!in_array($input["status"], ["active", "inactive"], true)) {
-            $errors[] = "Status must be active or inactive";
+            $errors["status"] = "Status must be active or inactive.";
         }
 
         return $errors;

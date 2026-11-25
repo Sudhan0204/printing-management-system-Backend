@@ -73,11 +73,7 @@ class ClientController
         $errors = $this->validateClientInput($input, true);
 
         if ($errors) {
-            Response::json([
-                "success" => false,
-                "message" => $errors[0],
-                "errors" => $errors,
-            ], 422);
+            Validation::fail($errors, reset($errors) ?: "Validation failed");
         }
 
         $loginEmail = $input["login_email"];
@@ -166,11 +162,7 @@ class ClientController
         $errors = $this->validateClientInput($input, false);
 
         if ($errors) {
-            Response::json([
-                "success" => false,
-                "message" => $errors[0],
-                "errors" => $errors,
-            ], 422);
+            Validation::fail($errors, reset($errors) ?: "Validation failed");
         }
 
         $owner = $this->userModel->findOwnerByTenantId($id);
@@ -390,11 +382,7 @@ class ClientController
         $errors = $this->validatePasswordPair($password, $confirmation);
 
         if ($errors) {
-            Response::json([
-                "success" => false,
-                "message" => $errors[0],
-                "errors" => $errors,
-            ], 422);
+            Validation::fail($errors, reset($errors) ?: "Validation failed");
         }
 
         $this->userModel->updatePassword($owner["id"], $password);
@@ -448,7 +436,7 @@ class ClientController
 
         $normalized["email"] = strtolower($normalized["email"]);
         $normalized["login_email"] = strtolower($normalized["login_email"]);
-        $normalized["phone"] = preg_replace("/\s+/", "", $normalized["phone"]);
+        $normalized["phone"] = Validation::normalizePhone($normalized["phone"]);
         $normalized["status"] = $normalized["status"] !== ""
             ? strtolower($normalized["status"])
             : "active";
@@ -460,70 +448,97 @@ class ClientController
     {
         $errors = [];
 
-        $required = [
-            "business_name" => "Business name",
-            "owner_name" => "Owner name",
-            "email" => "Business email",
-            "phone" => "Phone",
-            "address" => "Address",
-            "city" => "City",
-            "state" => "State",
-            "pincode" => "Pincode",
-        ];
-
-        foreach ($required as $field => $label) {
-            if ($input[$field] === "") {
-                $errors[] = $label . " is required";
-            }
+        $businessError = Validation::length(
+            $input["business_name"],
+            Validation::LIMITS["business_name"]["min"],
+            Validation::LIMITS["business_name"]["max"],
+            "Business name"
+        );
+        if ($businessError) {
+            $errors["business_name"] = $businessError;
         }
 
-        if ($input["email"] !== "" && !filter_var($input["email"], FILTER_VALIDATE_EMAIL)) {
-            $errors[] = "Enter a valid business email";
+        $ownerError = Validation::length(
+            $input["owner_name"],
+            Validation::LIMITS["owner_name"]["min"],
+            Validation::LIMITS["owner_name"]["max"],
+            "Owner name"
+        );
+        if ($ownerError) {
+            $errors["owner_name"] = $ownerError;
+        }
+
+        $emailError = Validation::email($input["email"], true);
+        if ($emailError) {
+            $errors["email"] = $emailError;
         }
 
         if ($requirePassword || $input["login_email"] !== "") {
-            if ($input["login_email"] === "") {
-                $errors[] = "Login email is required";
-            } elseif (!filter_var($input["login_email"], FILTER_VALIDATE_EMAIL)) {
-                $errors[] = "Enter a valid login email";
+            $loginError = Validation::email($input["login_email"], true);
+            if ($loginError) {
+                $errors["login_email"] = $loginError === "This field is required."
+                    ? "Login email is required."
+                    : $loginError;
             }
         }
 
-        if ($input["phone"] !== "" && !preg_match("/^[0-9+\-]{7,20}$/", $input["phone"])) {
-            $errors[] = "Enter a valid phone number";
+        $phoneError = Validation::indianMobile($input["phone"]);
+        if ($phoneError) {
+            $errors["phone"] = $phoneError;
+        }
+
+        $addressError = Validation::length(
+            $input["address"],
+            1,
+            Validation::LIMITS["address"]["max"],
+            "Address"
+        );
+        if ($addressError) {
+            $errors["address"] = $addressError;
+        }
+
+        $cityError = Validation::length(
+            $input["city"],
+            Validation::LIMITS["city"]["min"],
+            Validation::LIMITS["city"]["max"],
+            "City"
+        );
+        if ($cityError) {
+            $errors["city"] = $cityError;
+        }
+
+        $stateError = Validation::length(
+            $input["state"],
+            Validation::LIMITS["state"]["min"],
+            Validation::LIMITS["state"]["max"],
+            "State"
+        );
+        if ($stateError) {
+            $errors["state"] = $stateError;
+        }
+
+        $pincodeError = Validation::indianPincode($input["pincode"]);
+        if ($pincodeError) {
+            $errors["pincode"] = $pincodeError;
         }
 
         if (!in_array($input["status"], ["active", "suspended"], true)) {
-            $errors[] = "Status must be active or suspended";
+            $errors["status"] = "Status must be active or suspended.";
         }
 
-        $lengths = [
-            "business_name" => 150,
-            "owner_name" => 100,
-            "email" => 150,
-            "phone" => 30,
-            "address" => 255,
-            "city" => 100,
-            "state" => 100,
-            "pincode" => 20,
-        ];
+        if ($requirePassword || $input["password"] !== "") {
+            $passwordError = Validation::strongPassword(
+                $input["password"],
+                $input["password_confirmation"]
+            );
 
-        foreach ($lengths as $field => $max) {
-            if (strlen($input[$field]) > $max) {
-                $errors[] = ucfirst(str_replace("_", " ", $field)) . " is too long";
+            if ($passwordError) {
+                if (str_contains($passwordError, "confirmation")) {
+                    $errors["password_confirmation"] = $passwordError;
+                } else {
+                    $errors["password"] = $passwordError;
+                }
             }
-        }
-
-        if ($requirePassword) {
-            $errors = array_merge(
-                $errors,
-                $this->validatePasswordPair($input["password"], $input["password_confirmation"])
-            );
-        } elseif ($input["password"] !== "") {
-            $errors = array_merge(
-                $errors,
-                $this->validatePasswordPair($input["password"], $input["password_confirmation"])
-            );
         }
 
         return $errors;
@@ -531,26 +546,9 @@ class ClientController
 
     private function validatePasswordPair($password, $confirmation)
     {
-        $errors = [];
+        $error = Validation::strongPassword($password, $confirmation);
 
-        if ($password === "") {
-            $errors[] = "Password is required";
-            return $errors;
-        }
-
-        if (strlen($password) < 8 || strlen($password) > 128) {
-            $errors[] = "Password must be between 8 and 128 characters";
-        }
-
-        if (!preg_match("/[A-Za-z]/", $password) || !preg_match("/[0-9]/", $password)) {
-            $errors[] = "Password must include at least one letter and one number";
-        }
-
-        if ($password !== $confirmation) {
-            $errors[] = "Password confirmation does not match";
-        }
-
-        return $errors;
+        return $error ? ["password" => $error] : [];
     }
 
     private function formatClient(array $tenant, $owner = null)

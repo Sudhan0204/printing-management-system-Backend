@@ -167,3 +167,31 @@ CREATE TABLE IF NOT EXISTS bill_items (
     CONSTRAINT fk_bill_items_product FOREIGN KEY (product_id) REFERENCES products(id)
         ON DELETE RESTRICT ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Note: live installs also add paid_amount, balance_amount, payment_status on bills
+-- via migrations/003_payments.sql.
+
+CREATE TABLE IF NOT EXISTS payments (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    tenant_id INT UNSIGNED NOT NULL,
+    bill_id INT UNSIGNED NOT NULL,
+    customer_id INT UNSIGNED NOT NULL,
+    payment_date DATE NOT NULL,
+    payment_method ENUM('cash', 'bank_transfer', 'upi', 'card', 'other') NOT NULL,
+    amount DECIMAL(14, 2) NOT NULL,
+    reference_number VARCHAR(100) NULL DEFAULT NULL,
+    notes TEXT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_payments_tenant (tenant_id),
+    INDEX idx_payments_bill (bill_id),
+    INDEX idx_payments_customer (customer_id),
+    INDEX idx_payments_date (payment_date),
+    INDEX idx_payments_method (payment_method),
+    CONSTRAINT fk_payments_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+        ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT fk_payments_bill FOREIGN KEY (bill_id) REFERENCES bills(id)
+        ON DELETE RESTRICT ON UPDATE CASCADE,
+    CONSTRAINT fk_payments_customer FOREIGN KEY (customer_id) REFERENCES customers(id)
+        ON DELETE RESTRICT ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

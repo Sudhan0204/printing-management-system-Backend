@@ -89,13 +89,14 @@ class ProductController
         $errors = $this->validate($input);
 
         if ($errors) {
-            Response::json(["success" => false, "message" => $errors[0], "errors" => $errors], 422);
+            Validation::fail($errors);
         }
 
-        $initialRate = $input["initial_rate"];
-        if ($initialRate === null || $initialRate < 0) {
-            Response::json(["success" => false, "message" => "A valid initial rate is required"], 422);
+        $rateError = Validation::money($input["initial_rate_raw"], "Initial rate", true);
+        if ($rateError) {
+            Validation::fail(["initial_rate" => $rateError]);
         }
+        $initialRate = round((float) $input["initial_rate_raw"], 2);
 
         try {
             $this->db->beginTransaction();
@@ -161,7 +162,7 @@ class ProductController
         $errors = $this->validate($input, false);
 
         if ($errors) {
-            Response::json(["success" => false, "message" => $errors[0], "errors" => $errors], 422);
+            Validation::fail($errors);
         }
 
         $sql = "UPDATE products SET
@@ -284,15 +285,18 @@ class ProductController
         }
 
         $data = $this->readJson();
-        $rate = isset($data["rate"]) ? (float) $data["rate"] : -1;
+        $rateRaw = $data["rate"] ?? "";
         $effectiveFrom = trim((string) ($data["effective_from"] ?? date("Y-m-d")));
 
-        if ($rate < 0) {
-            Response::json(["success" => false, "message" => "Rate must be zero or greater"], 422);
+        $rateError = Validation::money($rateRaw, "Rate", true);
+        if ($rateError) {
+            Validation::fail(["rate" => $rateError]);
         }
 
+        $rate = round((float) $rateRaw, 2);
+
         if (!preg_match("/^\d{4}-\d{2}-\d{2}$/", $effectiveFrom)) {
-            Response::json(["success" => false, "message" => "Enter a valid effective date"], 422);
+            Validation::fail(["effective_from" => "Enter a valid effective date."]);
         }
 
         try {
@@ -415,7 +419,7 @@ class ProductController
             "unit" => strtolower(trim((string) ($input["unit"] ?? "piece"))),
             "pricing_type" => strtolower(trim((string) ($input["pricing_type"] ?? "fixed_price"))),
             "status" => strtolower(trim((string) ($input["status"] ?? "active"))) ?: "active",
-            "initial_rate" => $initialRate === null || $initialRate === "" ? null : (float) $initialRate,
+            "initial_rate_raw" => $initialRate === null ? "" : (string) $initialRate,
             "effective_from" => trim((string) ($input["effective_from"] ?? "")),
         ];
     }
@@ -424,22 +428,52 @@ class ProductController
     {
         $errors = [];
 
-        if ($input["product_name"] === "") {
-            $errors[] = "Product name is required";
-        } elseif (strlen($input["product_name"]) > 150) {
-            $errors[] = "Product name is too long";
+        $nameError = Validation::length(
+            $input["product_name"],
+            Validation::LIMITS["product_name"]["min"],
+            Validation::LIMITS["product_name"]["max"],
+            "Product name"
+        );
+        if ($nameError) {
+            $errors["product_name"] = $nameError;
+        }
+
+        $categoryError = Validation::length(
+            $input["category"],
+            Validation::LIMITS["category"]["min"],
+            Validation::LIMITS["category"]["max"],
+            "Category",
+            false
+        );
+        if ($categoryError) {
+            $errors["category"] = $categoryError;
+        }
+
+        $descriptionError = Validation::length(
+            $input["description"],
+            Validation::LIMITS["description"]["min"],
+            Validation::LIMITS["description"]["max"],
+            "Description",
+            false
+        );
+        if ($descriptionError) {
+            $errors["description"] = $descriptionError;
         }
 
         if (!in_array($input["unit"], BillingCalc::UNITS, true)) {
-            $errors[] = "Select a valid unit";
+            $errors["unit"] = "Select a valid unit.";
         }
 
         if (!in_array($input["pricing_type"], BillingCalc::PRICING_TYPES, true)) {
-            $errors[] = "Select a valid pricing type";
+            $errors["pricing_type"] = "Select a valid pricing type.";
         }
 
         if (!in_array($input["status"], ["active", "inactive"], true)) {
-            $errors[] = "Status must be active or inactive";
+            $errors["status"] = "Status must be active or inactive.";
+        }
+
+        if ($forCreate && $input["effective_from"] !== "" && !preg_match("/^\d{4}-\d{2}-\d{2}$/", $input["effective_from"])) {
+            $errors["effective_from"] = "Enter a valid effective date.";
         }
 
         return $errors;

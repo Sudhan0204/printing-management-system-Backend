@@ -34,7 +34,7 @@ class TenantAuthController
             ], 400);
         }
 
-        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        if (strlen($email) > 254 || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
             Response::json([
                 "success" => false,
                 "message" => "Enter a valid email address",
