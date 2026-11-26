@@ -11,8 +11,8 @@ use PhpOffice\PhpSpreadsheet\Worksheet\Worksheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 
 /**
- * Fixed 5-sheet customer report workbook:
- * Dashboard | Customers | Bills | Bill Items | Payments
+ * Fixed 6-sheet customer report workbook:
+ * Dashboard | Customers | Bills | Bill Items | Payments | Customer Products
  */
 class CustomerReportExcel
 {
@@ -56,7 +56,7 @@ class CustomerReportExcel
             ->setCreator($business["business_name"] ?? "PrintDesk")
             ->setTitle("Customer Report")
             ->setSubject("Customer financial report")
-            ->setDescription("Dashboard, customers, bills, bill items and payments");
+            ->setDescription("Dashboard, customers, bills, bill items, payments and customer products");
 
         $dashboard = $spreadsheet->getActiveSheet();
         $dashboard->setTitle("Dashboard");
@@ -77,6 +77,10 @@ class CustomerReportExcel
         $paymentsSheet = $spreadsheet->createSheet();
         $paymentsSheet->setTitle("Payments");
         $this->writePaymentsSheet($paymentsSheet, $business, $dataset["payments"], $meta);
+
+        $productsSheet = $spreadsheet->createSheet();
+        $productsSheet->setTitle("Customer Products");
+        $this->writeCustomerProductsSheet($productsSheet, $business, $dataset["bill_items"], $meta);
 
         $spreadsheet->setActiveSheetIndex(0);
 
@@ -105,6 +109,7 @@ class CustomerReportExcel
         foreach ($customers as $customer) {
             $customerId = (int) $customer["id"];
             $customerName = $customer["customer_name"];
+            $customerPhone = $customer["phone"] ?? "";
 
             foreach ($customer["bills"] ?? [] as $bill) {
                 $bills[] = array_merge($bill, [
@@ -117,6 +122,7 @@ class CustomerReportExcel
                 $billItems[] = array_merge($item, [
                     "customer_id" => $customerId,
                     "customer_name" => $customerName,
+                    "customer_phone" => $customerPhone,
                 ]);
             }
 
@@ -403,6 +409,66 @@ class CustomerReportExcel
         if ($row === $start) {
             $sheet->setCellValue("A{$row}", "No bill items in the selected bill-date range.");
             $sheet->mergeCells("A{$row}:K{$row}");
+            $row++;
+        }
+
+        $this->finalizeTable($sheet, $headerRow, max($start, $row - 1), count($headers));
+        $this->autosize($sheet, count($headers));
+        $sheet->freezePane("A" . ($headerRow + 1));
+    }
+
+    private function writeCustomerProductsSheet(Worksheet $sheet, array $business, array $items, array $meta)
+    {
+        $headers = [
+            "Customer ID",
+            "Customer Name",
+            "Customer Phone",
+            "Bill Number",
+            "Bill Date",
+            "Product Name",
+            "Unit",
+            "Pricing Type",
+            "Width",
+            "Height",
+            "Quantity",
+            "Rate",
+            "Area",
+            "Product Amount",
+        ];
+
+        $this->writeSheetBanner($sheet, $business, $meta, "Customer Products (historical snapshots)", count($headers));
+        $headerRow = 4;
+        $this->writeHeaderRow($sheet, $headers, $headerRow);
+
+        $row = $headerRow + 1;
+        $start = $row;
+        foreach ($items as $index => $item) {
+            $sheet->fromArray([
+                (int) $item["customer_id"],
+                $item["customer_name"],
+                $item["customer_phone"] ?? "",
+                $item["bill_number"],
+                $this->formatDate($item["bill_date"] ?? null),
+                $item["product_name"],
+                $item["unit_label"] ?? $item["unit"],
+                $item["pricing_type_label"] ?? ($item["pricing_type"] ?? ""),
+                $item["width"],
+                $item["height"],
+                (float) $item["quantity"],
+                (float) $item["rate"],
+                $item["area"],
+                (float) $item["item_amount"],
+            ], null, "A" . $row);
+
+            $this->styleCurrency($sheet, "L{$row}");
+            $this->styleCurrency($sheet, "N{$row}");
+            $this->applyAltRow($sheet, "A{$row}:N{$row}", $index);
+            $row++;
+        }
+
+        if ($row === $start) {
+            $sheet->setCellValue("A{$row}", "No products in the selected bill-date range.");
+            $sheet->mergeCells("A{$row}:N{$row}");
             $row++;
         }
 

@@ -188,6 +188,52 @@ assertTrue(abs((float) $match["total_billed"] - 40) < 0.01, "Billed 40");
 assertTrue(abs((float) $match["total_paid"] - 15) < 0.01, "Paid 15");
 assertTrue(abs((float) $match["outstanding_balance"] - 25) < 0.01, "Outstanding 25");
 
+// Payment status filter: partial payment customer
+[$status, $json] = request(
+    "GET",
+    $base . "/api/tenant/reports/customers?payment_status=partially_paid&search_name=" . urlencode("Report Multi"),
+    $cookieFile
+);
+assertTrue($status === 200, "Payment status partially_paid filter");
+$partialMatch = false;
+foreach ($json["customers"] as $row) {
+    if ((int) $row["id"] === $multiCustomerId) {
+        $partialMatch = true;
+        break;
+    }
+}
+assertTrue($partialMatch, "Partially paid customer found by payment_status");
+
+[$status, $json] = request(
+    "GET",
+    $base . "/api/tenant/reports/customers?payment_status=paid&search_name=" . urlencode("Report Multi"),
+    $cookieFile
+);
+assertTrue($status === 200, "Payment status paid filter");
+$paidMatch = false;
+foreach ($json["customers"] as $row) {
+    if ((int) $row["id"] === $multiCustomerId) {
+        $paidMatch = true;
+        break;
+    }
+}
+assertTrue(!$paidMatch, "Partially paid customer excluded from paid filter");
+
+[$status, $json] = request(
+    "GET",
+    $base . "/api/tenant/reports/customers?payment_status=unpaid&search_name=" . urlencode("Report Zero"),
+    $cookieFile
+);
+assertTrue($status === 200, "Payment status unpaid filter");
+$zeroUnpaid = false;
+foreach ($json["customers"] as $row) {
+    if ((int) $row["id"] === $zeroCustomerId) {
+        $zeroUnpaid = true;
+        break;
+    }
+}
+assertTrue(!$zeroUnpaid, "Customer with no bills excluded from unpaid");
+
 // Unauthorized: no selected customers
 [$status, $json] = request("POST", $base . "/api/tenant/reports/customers/export", $cookieFile, [
     "mode" => "selected",
@@ -220,18 +266,18 @@ assertTrue(substr($binary, 0, 2) === "PK", "Multi export is XLSX");
 $multiPath = sys_get_temp_dir() . "/pms_report_multi.xlsx";
 file_put_contents($multiPath, $binary);
 
-// Verify fixed 5-sheet workbook via PhpSpreadsheet
+// Verify fixed 6-sheet workbook via PhpSpreadsheet
 require_once dirname(__DIR__) . "/vendor/autoload.php";
 $reader = \PhpOffice\PhpSpreadsheet\IOFactory::load($multiPath);
 $titles = [];
 foreach ($reader->getAllSheets() as $sheet) {
     $titles[] = $sheet->getTitle();
 }
-$expected = ["Dashboard", "Customers", "Bills", "Bill Items", "Payments"];
-assertTrue($titles === $expected, "Exactly 5 fixed worksheets: " . implode(", ", $titles));
+$expected = ["Dashboard", "Customers", "Bills", "Bill Items", "Payments", "Customer Products"];
+assertTrue($titles === $expected, "Exactly 6 fixed worksheets: " . implode(", ", $titles));
 
 $oneReader = \PhpOffice\PhpSpreadsheet\IOFactory::load($onePath);
-assertTrue(count($oneReader->getAllSheets()) === 5, "One-customer export also has exactly 5 sheets");
+assertTrue(count($oneReader->getAllSheets()) === 6, "One-customer export also has exactly 6 sheets");
 
 $billsSheet = $reader->getSheetByName("Bills");
 $billHeader = [];
@@ -251,6 +297,38 @@ for ($r = 5; $r <= 50; $r++) {
     $itemCount++;
 }
 assertTrue($itemCount >= 2, "Multi-product bill produces multiple bill-item rows");
+
+$productsSheet = $reader->getSheetByName("Customer Products");
+assertTrue($productsSheet !== null, "Customer Products sheet exists");
+$productHeader = [];
+for ($col = 1; $col <= 14; $col++) {
+    $productHeader[] = (string) $productsSheet->getCellByColumnAndRow($col, 4)->getValue();
+}
+assertTrue($productHeader[0] === "Customer ID", "Customer Products starts with Customer ID");
+assertTrue(in_array("Product Name", $productHeader, true), "Customer Products has Product Name");
+assertTrue(in_array("Pricing Type", $productHeader, true), "Customer Products has Pricing Type");
+assertTrue(in_array("Product Amount", $productHeader, true), "Customer Products has Product Amount");
+
+$productCount = 0;
+$seenKeys = [];
+$duplicate = false;
+for ($r = 5; $r <= 50; $r++) {
+    $custId = trim((string) $productsSheet->getCell("A{$r}")->getValue());
+    if ($custId === "" || str_starts_with($custId, "No product")) {
+        break;
+    }
+    $key = $custId . "|" . $productsSheet->getCell("D{$r}")->getValue()
+        . "|" . $productsSheet->getCell("F{$r}")->getValue()
+        . "|" . $productsSheet->getCell("K{$r}")->getValue()
+        . "|" . $productsSheet->getCell("N{$r}")->getValue();
+    if (isset($seenKeys[$key])) {
+        $duplicate = true;
+    }
+    $seenKeys[$key] = true;
+    $productCount++;
+}
+assertTrue($productCount >= 2, "Customer Products has multiple product rows");
+assertTrue(!$duplicate, "Customer Products has no duplicate rows");
 
 // Tenant isolation: foreign customer id rejected
 [$status, $json] = request("POST", $base . "/api/tenant/reports/customers/export", $cookieFile, [
