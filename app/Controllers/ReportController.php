@@ -5,6 +5,7 @@ class ReportController
     private $db;
 
     public const DATE_PRESETS = ["today", "this_week", "this_month", "last_month", "custom", ""];
+    public const PAYMENT_STATUSES = ["paid", "partially_paid", "unpaid", ""];
     public const EXPORT_MODES = ["selected", "filtered", "all"];
     public const MAX_EXPORT = 75;
 
@@ -57,10 +58,12 @@ class ReportController
                 "date_from" => $filters["date_from"],
                 "date_to" => $filters["date_to"],
                 "filter_label" => $filters["filter_label"],
+                "payment_status" => $filters["payment_status"],
                 "date_scope" => [
                     "bills" => "bill_date",
                     "payments" => "payment_date",
                     "outstanding" => "balance on bills matching bill_date filter",
+                    "payment_status" => "bill payment_status within bill-date scope",
                 ],
             ],
         ]);
@@ -141,6 +144,7 @@ class ReportController
             $allFilters["search_name"] = "";
             $allFilters["search_phone"] = "";
             $allFilters["search_email"] = "";
+            $allFilters["payment_status"] = "";
             $allFilters["date_from"] = null;
             $allFilters["date_to"] = null;
             $allFilters["date_preset"] = "";
@@ -218,6 +222,7 @@ class ReportController
         $searchPhone = preg_replace("/\D/", "", (string) ($input["search_phone"] ?? $input["phone"] ?? ""));
         $searchEmail = strtolower(trim((string) ($input["search_email"] ?? $input["email"] ?? "")));
         $status = strtolower(trim((string) ($input["status"] ?? "")));
+        $paymentStatus = strtolower(trim((string) ($input["payment_status"] ?? "")));
         $preset = strtolower(trim((string) ($input["date_preset"] ?? "")));
         $dateFrom = trim((string) ($input["date_from"] ?? ""));
         $dateTo = trim((string) ($input["date_to"] ?? ""));
@@ -238,6 +243,10 @@ class ReportController
             Validation::fail(["status" => "Status must be active or inactive."]);
         }
 
+        if ($paymentStatus !== "" && !in_array($paymentStatus, self::PAYMENT_STATUSES, true)) {
+            Validation::fail(["payment_status" => "Payment status must be paid, partially_paid, or unpaid."]);
+        }
+
         if ($preset !== "" && !in_array($preset, self::DATE_PRESETS, true)) {
             Validation::fail(["date_preset" => "Invalid date preset."]);
         }
@@ -249,6 +258,7 @@ class ReportController
             "search_phone" => $searchPhone,
             "search_email" => $searchEmail,
             "status" => $status,
+            "payment_status" => $paymentStatus,
             "date_preset" => $preset,
             "date_from" => $resolved["from"],
             "date_to" => $resolved["to"],
@@ -453,6 +463,62 @@ class ReportController
             $params[":status"] = $filters["status"];
         }
 
+        $paymentStatus = $filters["payment_status"] ?? "";
+        if ($paymentStatus !== "") {
+            $hasDate = $filters["date_from"] && $filters["date_to"];
+
+            if ($paymentStatus === "paid") {
+                // At least one bill in scope, and none unpaid/partial in that same scope.
+                $paidDate = $hasDate ? " AND b_paid.bill_date BETWEEN :ps_paid_from AND :ps_paid_to" : "";
+                $openDate = $hasDate ? " AND b_open.bill_date BETWEEN :ps_open_from AND :ps_open_to" : "";
+                $where[] = "EXISTS (
+                        SELECT 1 FROM bills b_paid
+                        WHERE b_paid.customer_id = c.id
+                          AND b_paid.tenant_id = c.tenant_id
+                          {$paidDate}
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1 FROM bills b_open
+                        WHERE b_open.customer_id = c.id
+                          AND b_open.tenant_id = c.tenant_id
+                          AND b_open.payment_status IN ('unpaid', 'partially_paid')
+                          {$openDate}
+                    )";
+                if ($hasDate) {
+                    $params[":ps_paid_from"] = $filters["date_from"];
+                    $params[":ps_paid_to"] = $filters["date_to"];
+                    $params[":ps_open_from"] = $filters["date_from"];
+                    $params[":ps_open_to"] = $filters["date_to"];
+                }
+            } elseif ($paymentStatus === "partially_paid") {
+                $partDate = $hasDate ? " AND b_part.bill_date BETWEEN :ps_part_from AND :ps_part_to" : "";
+                $where[] = "EXISTS (
+                        SELECT 1 FROM bills b_part
+                        WHERE b_part.customer_id = c.id
+                          AND b_part.tenant_id = c.tenant_id
+                          AND b_part.payment_status = 'partially_paid'
+                          {$partDate}
+                    )";
+                if ($hasDate) {
+                    $params[":ps_part_from"] = $filters["date_from"];
+                    $params[":ps_part_to"] = $filters["date_to"];
+                }
+            } elseif ($paymentStatus === "unpaid") {
+                $unpaidDate = $hasDate ? " AND b_unpaid.bill_date BETWEEN :ps_unpaid_from AND :ps_unpaid_to" : "";
+                $where[] = "EXISTS (
+                        SELECT 1 FROM bills b_unpaid
+                        WHERE b_unpaid.customer_id = c.id
+                          AND b_unpaid.tenant_id = c.tenant_id
+                          AND b_unpaid.payment_status = 'unpaid'
+                          {$unpaidDate}
+                    )";
+                if ($hasDate) {
+                    $params[":ps_unpaid_from"] = $filters["date_from"];
+                    $params[":ps_unpaid_to"] = $filters["date_to"];
+                }
+            }
+        }
+
         if (!empty($filters["require_activity"]) && $filters["date_from"] && $filters["date_to"]) {
             $where[] = "(
                 EXISTS (
@@ -629,9 +695,9 @@ class ReportController
 
     private function fetchBillItems($tenantId, $customerId, array $filters)
     {
-        $sql = "SELECT b.bill_number,
-                       bi.product_name_snapshot, bi.unit_snapshot, bi.width, bi.height, bi.quantity,
-                       bi.rate_snapshot, bi.area, bi.amount AS item_amount
+        $sql = "SELECT b.bill_number, b.bill_date,
+                       bi.product_name_snapshot, bi.unit_snapshot, bi.pricing_type_snapshot,
+                       bi.width, bi.height, bi.quantity, bi.rate_snapshot, bi.area, bi.amount AS item_amount
                 FROM bills b
                 INNER JOIN bill_items bi ON bi.bill_id = b.id AND bi.tenant_id = b.tenant_id
                 WHERE b.tenant_id = :tenant_id AND b.customer_id = :customer_id";
@@ -653,9 +719,12 @@ class ReportController
         return array_map(function ($row) {
             return [
                 "bill_number" => $row["bill_number"],
+                "bill_date" => $row["bill_date"],
                 "product_name" => $row["product_name_snapshot"],
                 "unit" => $row["unit_snapshot"],
                 "unit_label" => BillingCalc::unitLabel($row["unit_snapshot"]),
+                "pricing_type" => $row["pricing_type_snapshot"],
+                "pricing_type_label" => BillingCalc::pricingLabel($row["pricing_type_snapshot"]),
                 "width" => $row["width"] !== null ? (float) $row["width"] : null,
                 "height" => $row["height"] !== null ? (float) $row["height"] : null,
                 "quantity" => (float) $row["quantity"],
